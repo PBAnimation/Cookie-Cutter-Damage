@@ -74,14 +74,14 @@ class OBJECT_OT_cookie_cutter_damage(bpy.types.Operator):
         cut_out_obj = context.active_object
         cut_out_obj.name = original.name + "_CutOut"
 
-        bpy.context.view_layer.objects.active = cut_out_obj
-        bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
-
         bool_intersect = cut_out_obj.modifiers.new(name="Boolean_Intersect", type='BOOLEAN')
         bool_intersect.operation = 'INTERSECT'
         bool_intersect.object = cutter_random
         context.view_layer.objects.active = cut_out_obj
         bpy.ops.object.modifier_apply(modifier=bool_intersect.name)
+
+        bpy.context.view_layer.objects.active = cut_out_obj
+        bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
 
         bool_diff = original.modifiers.new(name="Boolean_Diff", type='BOOLEAN')
         bool_diff.operation = 'DIFFERENCE'
