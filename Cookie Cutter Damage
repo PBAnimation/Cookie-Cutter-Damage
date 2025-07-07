@@ -1,0 +1,171 @@
+import bpy
+import bmesh
+import random
+from mathutils import Vector, Euler
+from math import radians
+
+def randomize_mesh_vertices(obj, amount):
+    if obj.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    mesh = obj.data
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    for v in bm.verts:
+        offset = Vector((
+            random.uniform(-amount, amount),
+            random.uniform(-amount, amount),
+            random.uniform(-amount, amount),
+        ))
+        v.co += offset
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+
+def random_rotate_object(obj, max_degrees=20):
+    rx = radians(random.uniform(-max_degrees, max_degrees))
+    ry = radians(random.uniform(-max_degrees, max_degrees))
+    rz = radians(random.uniform(-max_degrees, max_degrees))
+    obj.rotation_euler.rotate(Euler((rx, ry, rz), 'XYZ'))
+
+class OBJECT_OT_cookie_cutter_damage(bpy.types.Operator):
+    bl_idname = "object.cookie_cutter_damage"
+    bl_label = "Cookie Cutter Damage"
+    bl_description = "Cut original mesh by cutter with randomization; restore cutter shape; assign material"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        scene = context.scene
+        original = scene.cookie_cutter_original
+        cutter = scene.cookie_cutter_cutter
+        mat = scene.cookie_cutter_material
+        rand_amount = scene.cookie_cutter_random_amount
+
+        if not original or not cutter:
+            self.report({'ERROR'}, "Select both Original and Cutter mesh objects")
+            return {'CANCELLED'}
+
+        for obj in (original, cutter):
+            obj.hide_set(False)
+            obj.hide_viewport = False
+            obj.hide_render = False
+            obj.select_set(False)
+
+        cutter_mesh_backup = cutter.data.copy()
+        cutter_rot_backup = cutter.rotation_euler.copy()
+        cutter_loc_backup = cutter.location.copy()
+        cutter_scale_backup = cutter.scale.copy()
+
+        bpy.ops.object.select_all(action='DESELECT')
+        cutter.select_set(True)
+        context.view_layer.objects.active = cutter
+        bpy.ops.object.duplicate()
+        cutter_random = context.active_object
+        cutter_random.name = cutter.name + "_Randomized"
+
+        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+
+        randomize_mesh_vertices(cutter_random, amount=rand_amount)
+        random_rotate_object(cutter_random, max_degrees=0)
+
+        bpy.ops.object.select_all(action='DESELECT')
+        original.select_set(True)
+        context.view_layer.objects.active = original
+        bpy.ops.object.duplicate()
+        cut_out_obj = context.active_object
+        cut_out_obj.name = original.name + "_CutOut"
+
+        bpy.context.view_layer.objects.active = cut_out_obj
+        bpy.ops.object.origin_set(type='ORIGIN_GEOMETRY', center='BOUNDS')
+
+        bool_intersect = cut_out_obj.modifiers.new(name="Boolean_Intersect", type='BOOLEAN')
+        bool_intersect.operation = 'INTERSECT'
+        bool_intersect.object = cutter_random
+        context.view_layer.objects.active = cut_out_obj
+        bpy.ops.object.modifier_apply(modifier=bool_intersect.name)
+
+        bool_diff = original.modifiers.new(name="Boolean_Diff", type='BOOLEAN')
+        bool_diff.operation = 'DIFFERENCE'
+        bool_diff.object = cutter_random
+        context.view_layer.objects.active = original
+        bpy.ops.object.modifier_apply(modifier=bool_diff.name)
+
+        bpy.data.objects.remove(cutter_random, do_unlink=True)
+
+        cutter.data = cutter_mesh_backup
+        cutter.rotation_euler = cutter_rot_backup
+        cutter.location = cutter_loc_backup
+        cutter.scale = cutter_scale_backup
+
+        random_rotate_object(cut_out_obj, max_degrees=0)
+
+        if mat:
+            for obj in (original, cut_out_obj):
+                if obj.data.materials:
+                    obj.data.materials[0] = mat
+                else:
+                    obj.data.materials.append(mat)
+
+        self.report({'INFO'}, "Cookie Cutter Damage finished")
+        return {'FINISHED'}
+
+class VIEW3D_PT_cookie_cutter_panel(bpy.types.Panel):
+    bl_label = "Cookie Cutter Damage"
+    bl_idname = "VIEW3D_PT_cookie_cutter_damage"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = "Cookie Cutter"
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        row = layout.row(align=True)
+        row.label(text="Original Object:")
+        row.prop(scene, "cookie_cutter_original", text="", icon='OBJECT_DATA', emboss=True)
+
+        row = layout.row(align=True)
+        row.label(text="Cutter Object:")
+        row.prop(scene, "cookie_cutter_cutter", text="", icon='MOD_BOOLEAN', emboss=True)
+
+        row = layout.row(align=True)
+        row.label(text="Damage Material:")
+        row.prop(scene, "cookie_cutter_material", text="", icon='MATERIAL', emboss=True)
+
+        layout.prop(scene, "cookie_cutter_random_amount")
+        layout.operator("object.cookie_cutter_damage", text="Cut Damage")
+
+def register():
+    bpy.utils.register_class(OBJECT_OT_cookie_cutter_damage)
+    bpy.utils.register_class(VIEW3D_PT_cookie_cutter_panel)
+    bpy.types.Scene.cookie_cutter_original = bpy.props.PointerProperty(
+        name="Original Object",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == 'MESH'
+    )
+    bpy.types.Scene.cookie_cutter_cutter = bpy.props.PointerProperty(
+        name="Cutter Object",
+        type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == 'MESH'
+    )
+    bpy.types.Scene.cookie_cutter_material = bpy.props.PointerProperty(
+        name="Damage Material",
+        type=bpy.types.Material,
+        description="Material to assign to damaged pieces"
+    )
+    bpy.types.Scene.cookie_cutter_random_amount = bpy.props.FloatProperty(
+        name="Vertex Randomize Amount",
+        default=0.3,
+        min=0.0,
+        max=2.0,
+        step=0.1
+    )
+
+def unregister():
+    bpy.utils.unregister_class(OBJECT_OT_cookie_cutter_damage)
+    bpy.utils.unregister_class(VIEW3D_PT_cookie_cutter_panel)
+    del bpy.types.Scene.cookie_cutter_original
+    del bpy.types.Scene.cookie_cutter_cutter
+    del bpy.types.Scene.cookie_cutter_material
+    del bpy.types.Scene.cookie_cutter_random_amount
+
+if __name__ == "__main__":
+    register()
